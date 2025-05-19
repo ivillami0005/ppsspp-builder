@@ -1,0 +1,59 @@
+name: Build PPSSPP for iOS
+
+on:
+  push:
+    branches:
+      - main  # or your main branch name
+  pull_request:
+    branches:
+      - main
+
+jobs:
+  build:
+    runs-on: macos-latest
+
+    steps:
+    - name: Checkout repository
+      uses: actions/checkout@v3
+      with:
+        submodules: recursive
+
+    - name: Install Dependencies
+      run: |
+        brew install cmake
+
+    - name: Set up Xcode Command Line Tools (Optional for compatibility)
+      run: sudo xcode-select -switch /Applications/Xcode_9.4.1.app/Contents/Developer # Replace with your Xcode 9.4.1 path if needed
+
+    - name: Build IPA
+      run: make ipa
+
+    - name: Upload IPA Artifact
+      uses: actions/upload-artifact@v3
+      with:
+        name: ppsspp-ios-ipa
+        path: PPSSPP.ipa # Adjust the path if necessary
+
+    - name: Create Release (Optional)
+      if: github.ref == 'refs/heads/main' # or your main branch name
+      uses: actions/create-release@v1
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      with:
+        tag_name: latest
+        release_name: Latest PPSSPP iOS Build
+        body: |
+          This is the latest build of PPSSPP for iOS.
+        draft: false
+        prerelease: false
+
+    - name: Upload IPA to Release (Optional)
+      if: github.ref == 'refs/heads/main'
+      uses: actions/upload-release-asset@v1
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      with:
+        upload_url: ${{ github.event.release.upload_url }}
+        asset_path: PPSSPP.ipa # Adjust the path if necessary
+        asset_name: PPSSPP.ipa
+        asset_content_type: application/octet-stream
