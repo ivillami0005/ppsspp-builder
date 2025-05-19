@@ -1,75 +1,47 @@
 name: Build PPSSPP on macos-latest
 
 on:
-  workflow_dispatch::
-    branches:
-      - main
-  pull_request:
-    branches:
-      - main
+  workflow_dispatch:
+    inputs:
+      build_type:
+        description: 'Type of build (Release, Debug)'
+        required: false
+        default: 'Release'
+        type: string
 
 jobs:
   build:
     runs-on: macos-latest
     steps:
-      # Step 1: Checkout the code from the repository at the default root
       - name: Checkout repository
         uses: actions/checkout@v4
         with:
           submodules: recursive
 
-      # Step 2: Verify that ppsspp directory exists at root to avoid path issues
       - name: Verify ppsspp directory exists
         run: |
-          if [ ! -d "ppsspp" ]; then
-            echo "Error: 'ppsspp' directory not found in root of repository."
-            exit 1
-          fi
-
-      # Step 3: Install necessary dependencies with Homebrew (e.g., cmake, make, ldid)
-      - name: Install dependencies via Homebrew
-        run: |
-          brew install cmake make ldid
-
-      # Step 4: Add GNU make binaries installed by Homebrew to PATH
-      - name: Add GNU make to PATH
-        run: echo "$(brew --prefix make)/libexec/gnubin" >> $GITHUB_PATH
-
-      # Step 5: Run the build script exactly as intended, starting from repository root
-      - name: Build PPSSPP iOS
-        working-directory: ${{ github.workspace }}
-        run: |
-          # Check again just before build to be safe
           if [ ! -d "ppsspp" ]; then
             echo "Error: 'ppsspp' directory not found."
             exit 1
           fi
 
-          # Prevent running in incorrect directory, then proceed
-          cd ppsspp
+      - name: Install dependencies
+        run: brew install cmake make ldid
 
-          # Generate git version source info
+      - name: Add GNU make to PATH
+        run: echo "$(brew --prefix make)/libexec/gnubin" >> $GITHUB_PATH
+
+      - name: Build PPSSPP
+        run: |
+          cd ppsspp
           echo "const char *PPSSPP_GIT_VERSION = \"$(git describe --always)\";" > git-version.cpp
           echo "#define PPSSPP_GIT_VERSION_NO_UPDATE 1" >> git-version.cpp
 
-          # Create build directory if it doesn't exist
           mkdir -p build-ios
           cd build-ios
 
-          # Configure the build with CMake for iOS
-          cmake -DCMAKE_TOOLCHAIN_FILE=../cmake/Toolchains/ios.cmake ..
-
-          # Use Homebrew GNU make for parallel build jobs as per CPU cores
+          cmake -DCMAKE_TOOLCHAIN_FILE=../cmake/Toolchains/ios.cmake -DCMAKE_BUILD_TYPE=${{ inputs.build_type }} ..
           /usr/local/opt/make/libexec/gnubin/make -j$(sysctl -n hw.ncpu)
 
-          # Create symbolic link 'Payload' required for packaging
           ln -s ./ Payload
-
-          # Create the Version.txt string with formatted git describe info
-          git describe --tags --match="v*" | /usr/local/opt/gnu-sed/libexec/gnubin/sed -e 's@-\\([^-]*\\)-\\([^-]*\\)$@-\1-\2@;s@^v@@;s@%@~@g' > PPSSPP.app/Version.txt
-
-          # Codesign the MoltenVK framework dynamically using ldid
-          /usr/local/bin/ldid -w -S -IlibMoltenVK -K../../certificate.p12 -Upassword PPSSPP.app/Frameworks/libMoltenVK.dylib
-
-          # Codesign the main app bundle
-          /usr/local/bin/ldid -w -S../../ent.xml -K../../certificate.p12 -Upassword PPSSPP.app
+          git describe --tags --match="v*" | /usr/local/opt/gnu-sed/libexec/gnubin/sed -e 's@-\\([^-]*\\)-\\([^-]*\\)$@-\\1-\\2@;s@^v@@;s@%@~@g' > PPSSPP
