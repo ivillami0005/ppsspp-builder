@@ -83,9 +83,9 @@ jobs:
           set -e
           cd $BUILD_DIR
           if [ -f PPSSPP.app/Frameworks/libMoltenVK.dylib ]; then
-            ldid -S ../../ent.xml -K ../../certificate.p12:password PPSSPP.app/Frameworks/libMoltenVK.dylib
+            ldid -S ../../ent.xml -K ../../certificate.p12:kravasign PPSSPP.app/Frameworks/libMoltenVK.dylib
           fi
-          ldid -S ../../ent.xml -K ../../certificate.p12:password PPSSPP.app
+          ldid -S ../../ent.xml -K ../../certificate.p12:kravasign PPSSPP.app
 
       - name: Package IPA
         id: package
