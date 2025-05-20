@@ -1,0 +1,41 @@
+name: Test Required Secrets
+
+on:
+  workflow_dispatch:
+
+jobs:
+  test-secrets:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check CERTIFICATE_P12 secret
+        run: |
+          if [ -z "${{ secrets.CERTIFICATE_P12 }}" ]; then
+            echo "CERTIFICATE_P12 secret is missing"
+            exit 1
+          fi
+          echo "${{ secrets.CERTIFICATE_P12 }}" | base64 -d > certificate.p12 || {
+            echo "CERTIFICATE_P12 is not valid base64"
+            exit 1
+          }
+          echo "CERTIFICATE_P12 is set and valid base64"
+
+      - name: Check ENTITLEMENTS_XML secret
+        run: |
+          if [ -z "${{ secrets.ENTITLEMENTS_XML }}" ]; then
+            echo "ENTITLEMENTS_XML secret is missing"
+            exit 1
+          fi
+          echo "${{ secrets.ENTITLEMENTS_XML }}" > ent.xml
+          if [ ! -s ent.xml ]; then
+            echo "ENTITLEMENTS_XML is empty or invalid"
+            exit 1
+          fi
+          echo "ENTITLEMENTS_XML is set and non-empty"
+
+      - name: Check CERTIFICATE_PASSWORD secret
+        run: |
+          if [ -z "${{ secrets.CERTIFICATE_PASSWORD }}" ]; then
+            echo "CERTIFICATE_PASSWORD secret is missing"
+            exit 1
+          fi
+          echo "CERTIFICATE_PASSWORD is set"
