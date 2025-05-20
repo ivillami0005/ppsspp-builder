@@ -1,47 +1,102 @@
-name: Build PPSSPP on macos-latest
-
+name: Generate iOS IPA
 on:
   workflow_dispatch:
     inputs:
-      build_type:
-        description: 'Type of build (Release, Debug)'
-        required: false
-        default: 'Release'
-        type: string
+      buildVariant:
+        type: choice
+        description: 'Build Variant'
+        required: true
+        default: 'release'
+        options:
+          - release
+          - debug
 
 jobs:
-  build:
+  ipa:
+    name: Generate ${{ github.event.inputs.buildVariant }} IPA
     runs-on: macos-latest
+
     steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
         with:
+          fetch-depth: 0
           submodules: recursive
 
-      - name: Verify ppsspp directory exists
+      - name: Install Dependencies
         run: |
-          if [ ! -d "ppsspp" ]; then
-            echo "Error: 'ppsspp' directory not found."
-            exit 1
-          fi
+          brew install ldid gnu-sed
+          echo "/usr/local/opt/gnu-sed/libexec/gnubin" >> $GITHUB_PATH
 
-      - name: Install dependencies
-        run: brew install cmake make ldid
-
-      - name: Add GNU make to PATH
-        run: echo "$(brew --prefix make)/libexec/gnubin" >> $GITHUB_PATH
-
-      - name: Build PPSSPP
+      - name: Set Up Code Signing
+        env:
+          CERTIFICATE_P12: ${{ secrets.CERTIFICATE_P12 }}
+          ENTITLEMENTS_XML: ${{ secrets.ENTITLEMENTS_XML }}
         run: |
-          cd ppsspp
-          echo "const char *PPSSPP_GIT_VERSION = \"$(git describe --always)\";" > git-version.cpp
+          echo "$CERTIFICATE_P12" | base64 --decode > certificate.p12
+          echo "$ENTITLEMENTS_XML" > ent.xml
+
+      - name: Check Valid Version Tags
+        id: valid-tags
+        shell: bash
+        run: |
+          echo "count=$(git tag -l 'v[0-9]*' | wc -l | tr -d ' ')" >> $GITHUB_OUTPUT
+
+      - name: Fetch Upstream Tags
+        if: ${{ steps.valid-tags.outputs.count == '0' }}
+        run: |
+          git remote add upstream https://github.com/hrydgard/ppsspp.git
+          git fetch --deepen=15000 --no-recurse-submodules --tags upstream || exit 0
+
+      - name: Set Environment Variables
+        run: |
+          echo "GIT_VERSION=$(git describe --always)" >> $GITHUB_ENV
+
+      - name: Generate Build Files
+        run: |
+          echo "const char *PPSSPP_GIT_VERSION = \"${GIT_VERSION}\";" > git-version.cpp
           echo "#define PPSSPP_GIT_VERSION_NO_UPDATE 1" >> git-version.cpp
+          mkdir -p build-ios/PPSSPP.app
+          echo "${GIT_VERSION#v}" > build-ios/PPSSPP.app/Version.txt
 
+      - name: Setup ccache
+        uses: hendrikmuhs/ccache-action@main
+        with:
+          key: ios
+          create-symlink: true
+
+      - name: Build Application
+        env:
+          CC: clang
+          CXX: clang++
+          USE_CCACHE: 1
+          CERTIFICATE_PASSWORD: ${{ secrets.CERTIFICATE_PASSWORD }}
+        run: |
+          export PATH="/usr/lib/ccache:/usr/local/opt/ccache/libexec:$PATH"
+          export CCACHE_SLOPPINESS=pch_defines,clang_index_store,ivfsoverlay,include_file_ctime,include_file_mtime,modules,system_headers,time_macros
+          export CCACHE_FILECLONE=true
+          export CCACHE_DEPEND=true
+          export CCACHE_COMPILERCHECK=content
+
+          cd ppsspp
           mkdir -p build-ios
           cd build-ios
+          cmake -DCMAKE_TOOLCHAIN_FILE=../cmake/Toolchains/ios.cmake ..
+          make -j$(sysctl -n hw.ncpu)
 
-          cmake -DCMAKE_TOOLCHAIN_FILE=../cmake/Toolchains/ios.cmake -DCMAKE_BUILD_TYPE=${{ inputs.build_type }} ..
-          /usr/local/opt/make/libexec/gnubin/make -j$(sysctl -n hw.ncpu)
+          # Sign binaries
+          ldid -w -S -IlibMoltenVK -K../../../certificate.p12 -U$CERTIFICATE_PASSWORD PPSSPP.app/Frameworks/libMoltenVK.dylib
+          ldid -w -S../../../ent.xml -K../../../certificate.p12 -U$CERTIFICATE_PASSWORD PPSSPP.app
 
-          ln -s ./ Payload
-          git describe --tags --match="v*" | /usr/local/opt/gnu-sed/libexec/gnubin/sed -e 's@-\\([^-]*\\)-\\([^-]*\\)$@-\\1-\\2@;s@^v@@;s@%@~@g' > PPSSPP
+      - name: Package IPA
+        run: |
+          cd ppsspp/build-ios
+          mkdir -p Payload
+          cp -r PPSSPP.app Payload/
+          zip -r PPSSPP.ipa Payload
+          mv PPSSPP.ipa ../../
+
+      - name: Upload Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: iOS-${{ github.event.inputs.buildVariant }} Build
+          path: PPSSPP.ipa
