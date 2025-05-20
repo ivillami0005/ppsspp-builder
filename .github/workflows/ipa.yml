@@ -69,7 +69,7 @@ jobs:
           CC: clang
           CXX: clang++
           USE_CCACHE: 1
-          CERTIFICATE_PASSWORD: ${{ secrets.CERTIFICATE_PASSWORD }}
+          CERTIFICATE_PASSWORD: password
         run: |
           export PATH="/usr/lib/ccache:/usr/local/opt/ccache/libexec:$PATH"
           export CCACHE_SLOPPINESS=pch_defines,clang_index_store,ivfsoverlay,include_file_ctime,include_file_mtime,modules,system_headers,time_macros
@@ -84,7 +84,7 @@ jobs:
           make -j$(sysctl -n hw.ncpu)
 
           # Sign binaries
-          ldid -w -S -IlibMoltenVK -K../../../certificate.p12 -U$CERTIFICATE_PASSWORD PPSSPP.app/Frameworks/libMoltenVK.dylib
+          ldid -w -IlibMoltenVK -K../../../certificate.p12 -U$CERTIFICATE_PASSWORD PPSSPP.app/Frameworks/libMoltenVK.dylib
           ldid -w -S../../../ent.xml -K../../../certificate.p12 -U$CERTIFICATE_PASSWORD PPSSPP.app
 
       - name: Package IPA
