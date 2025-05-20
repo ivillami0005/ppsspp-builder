@@ -35,12 +35,11 @@ jobs:
       - name: Prepare Code Signing Files
         env:
           CERTIFICATE_P12: ${{ secrets.CERTIFICATE_P12 }}
-          ENTITLEMENTS_XML: ${{ secrets.ENTITLEMENTS_XML }}
         run: |
           if [ -z "$CERTIFICATE_P12" ]; then echo "Missing CERTIFICATE_P12 secret"; exit 1; fi
-          if [ -z "$ENTITLEMENTS_XML" ]; then echo "Missing ENTITLEMENTS_XML secret"; exit 1; fi
           echo "$CERTIFICATE_P12" | base64 -D > certificate.p12
-          echo "$ENTITLEMENTS_XML" > ent.xml
+          # Copy ent.xml from the repo
+          cp ${{ github.workspace }}/ent.xml ent.xml
 
       - name: Check Valid Version Tags
         id: valid-tags
