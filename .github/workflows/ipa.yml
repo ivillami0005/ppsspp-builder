@@ -33,12 +33,8 @@ jobs:
           echo "/usr/local/opt/gnu-sed/libexec/gnubin" >> $GITHUB_PATH
 
       - name: Prepare Code Signing Files
-        env:
-          CERTIFICATE_P12: ${{ secrets.CERTIFICATE_P12 }}
         run: |
-          if [ -z "$CERTIFICATE_P12" ]; then echo "Missing CERTIFICATE_P12 secret"; exit 1; fi
-          echo "$CERTIFICATE_P12" | base64 -D > certificate.p12
-          # Copy ent.xml from the repo
+          cp ${{ github.workspace }}/certificate.p12 certificate.p12
           cp ${{ github.workspace }}/ent.xml ent.xml
 
       - name: Check Valid Version Tags
@@ -79,15 +75,13 @@ jobs:
           echo "${GIT_VERSION#v}" > PPSSPP.app/Version.txt
 
       - name: Code Sign Framework and App
-        env:
-          CERTIFICATE_PASSWORD: ${{ secrets.CERTIFICATE_PASSWORD }}
         run: |
           set -e
           cd $BUILD_DIR
           if [ -f PPSSPP.app/Frameworks/libMoltenVK.dylib ]; then
-            ldid -w -S${{ github.workspace }}/ent.xml -K${{ github.workspace }}/certificate.p12 -U"$CERTIFICATE_PASSWORD" PPSSPP.app/Frameworks/libMoltenVK.dylib
+            ldid -w -S${{ github.workspace }}/ent.xml -K${{ github.workspace }}/certificate.p12 -U"password" PPSSPP.app/Frameworks/libMoltenVK.dylib
           fi
-          ldid -w -S${{ github.workspace }}/ent.xml -K${{ github.workspace }}/certificate.p12 -U"$CERTIFICATE_PASSWORD" PPSSPP.app
+          ldid -w -S${{ github.workspace }}/ent.xml -K${{ github.workspace }}/certificate.p12 -U"password" PPSSPP.app
 
       - name: Package IPA
         id: package
