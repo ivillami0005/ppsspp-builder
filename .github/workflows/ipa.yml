@@ -1,4 +1,5 @@
 name: Generate iOS IPA
+
 on:
   workflow_dispatch:
     inputs:
@@ -16,47 +17,45 @@ jobs:
     name: Generate ${{ github.event.inputs.buildVariant }} IPA
     runs-on: macos-latest
 
+    env:
+      BUILD_DIR: ${{ github.workspace }}/ppsspp/build-ios
+
     steps:
-      - uses: actions/checkout@v4
+      - name: Checkout code
+        uses: actions/checkout@v4
         with:
           fetch-depth: 0
           submodules: recursive
 
-      - name: Install Dependencies
+      - name: Install dependencies
         run: |
           brew install ldid gnu-sed
           echo "/usr/local/opt/gnu-sed/libexec/gnubin" >> $GITHUB_PATH
 
-      - name: Set Up Code Signing
+      - name: Prepare Code Signing Files
         env:
           CERTIFICATE_P12: ${{ secrets.CERTIFICATE_P12 }}
           ENTITLEMENTS_XML: ${{ secrets.ENTITLEMENTS_XML }}
         run: |
-          echo "$CERTIFICATE_P12" | base64 --decode > certificate.p12
+          if [ -z "$CERTIFICATE_P12" ]; then echo "Missing CERTIFICATE_P12 secret"; exit 1; fi
+          if [ -z "$ENTITLEMENTS_XML" ]; then echo "Missing ENTITLEMENTS_XML secret"; exit 1; fi
+          echo "$CERTIFICATE_P12" | base64 -D > certificate.p12
           echo "$ENTITLEMENTS_XML" > ent.xml
 
       - name: Check Valid Version Tags
         id: valid-tags
-        shell: bash
         run: |
           echo "count=$(git tag -l 'v[0-9]*' | wc -l | tr -d ' ')" >> $GITHUB_OUTPUT
 
-      - name: Fetch Upstream Tags
-        if: ${{ steps.valid-tags.outputs.count == '0' }}
+      - name: Fetch Upstream Tags If Needed
+        if: steps.valid-tags.outputs.count == '0'
         run: |
           git remote add upstream https://github.com/hrydgard/ppsspp.git
           git fetch --deepen=15000 --no-recurse-submodules --tags upstream || exit 0
 
-      - name: Set Environment Variables
+      - name: Set GIT_VERSION Variable
         run: |
           echo "GIT_VERSION=$(git describe --always)" >> $GITHUB_ENV
-
-      - name: Generate Build Files
-        run: |
-          echo "const char *PPSSPP_GIT_VERSION = \"${GIT_VERSION}\";" > git-version.cpp
-          echo "#define PPSSPP_GIT_VERSION_NO_UPDATE 1" >> git-version.cpp
-          mkdir -p build-ios/PPSSPP.app
-          echo "${GIT_VERSION#v}" > build-ios/PPSSPP.app/Version.txt
 
       - name: Setup ccache
         uses: hendrikmuhs/ccache-action@main
@@ -64,39 +63,47 @@ jobs:
           key: ios
           create-symlink: true
 
-      - name: Build Application
+      - name: Configure and Build (CMake + Make)
         env:
           CC: clang
           CXX: clang++
           USE_CCACHE: 1
-          CERTIFICATE_PASSWORD: password
         run: |
-          export PATH="/usr/lib/ccache:/usr/local/opt/ccache/libexec:$PATH"
-          export CCACHE_SLOPPINESS=pch_defines,clang_index_store,ivfsoverlay,include_file_ctime,include_file_mtime,modules,system_headers,time_macros
-          export CCACHE_FILECLONE=true
-          export CCACHE_DEPEND=true
-          export CCACHE_COMPILERCHECK=content
-
+          set -e
           cd ppsspp
           mkdir -p build-ios
+          echo "const char *PPSSPP_GIT_VERSION = \"${GIT_VERSION}\";" > git-version.cpp
+          echo "#define PPSSPP_GIT_VERSION_NO_UPDATE 1" >> git-version.cpp
           cd build-ios
-          cmake -DCMAKE_TOOLCHAIN_FILE=../cmake/Toolchains/ios.cmake ..
+          cmake -DCMAKE_TOOLCHAIN_FILE=../cmake/Toolchains/ios.cmake -DCMAKE_BUILD_TYPE=${{ github.event.inputs.buildVariant }} ..
           make -j$(sysctl -n hw.ncpu)
+          echo "${GIT_VERSION#v}" > PPSSPP.app/Version.txt
 
-          # Sign binaries
-          ldid -w -IlibMoltenVK -K../../../certificate.p12 -U$CERTIFICATE_PASSWORD PPSSPP.app/Frameworks/libMoltenVK.dylib
-          ldid -w -S../../../ent.xml -K../../../certificate.p12 -U$CERTIFICATE_PASSWORD PPSSPP.app
+      - name: Code Sign Framework and App
+        env:
+          CERTIFICATE_PASSWORD: ${{ secrets.CERTIFICATE_PASSWORD }}
+        run: |
+          set -e
+          cd $BUILD_DIR
+          if [ -f PPSSPP.app/Frameworks/libMoltenVK.dylib ]; then
+            ldid -w -S${{ github.workspace }}/ent.xml -K${{ github.workspace }}/certificate.p12 -U"$CERTIFICATE_PASSWORD" PPSSPP.app/Frameworks/libMoltenVK.dylib
+          fi
+          ldid -w -S${{ github.workspace }}/ent.xml -K${{ github.workspace }}/certificate.p12 -U"$CERTIFICATE_PASSWORD" PPSSPP.app
 
       - name: Package IPA
+        id: package
         run: |
-          cd ppsspp/build-ios
+          set -e
+          cd $BUILD_DIR
           mkdir -p Payload
           cp -r PPSSPP.app Payload/
-          zip -r PPSSPP.ipa Payload
-          mv PPSSPP.ipa ../../
+          IPA_NAME="PPSSPP_${GIT_VERSION#v}_${{ github.event.inputs.buildVariant }}.ipa"
+          zip -r9 $IPA_NAME Payload
+          mv $IPA_NAME ${{ github.workspace }}/
+          echo "ipa_name=$IPA_NAME" >> $GITHUB_OUTPUT
 
-      - name: Upload Artifact
+      - name: Upload IPA Artifact
         uses: actions/upload-artifact@v4
         with:
-          name: iOS-${{ github.event.inputs.buildVariant }} Build
-          path: PPSSPP.ipa
+          name: ${{ steps.package.outputs.ipa_name }}
+          path: ${{ github.workspace }}/${{ steps.package.outputs.ipa_name }}
