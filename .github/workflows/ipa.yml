@@ -34,11 +34,9 @@ jobs:
 
       - name: Prepare Code Signing Files
         run: |
-          # Only copy certificate if not present
           if [ ! -f certificate.p12 ]; then
             cp "${{ github.workspace }}/certificate.p12" certificate.p12
           fi
-          # Only copy ent.xml if not present or different
           if [ ! -f ent.xml ] || ! cmp -s "${{ github.workspace }}/ent.xml" ent.xml; then
             cp "${{ github.workspace }}/ent.xml" ent.xml
           fi
@@ -85,9 +83,9 @@ jobs:
           set -e
           cd $BUILD_DIR
           if [ -f PPSSPP.app/Frameworks/libMoltenVK.dylib ]; then
-            ldid -w -S"${{ github.workspace }}/ent.xml" -K"${{ github.workspace }}/certificate.p12" -U"password" PPSSPP.app/Frameworks/libMoltenVK.dylib
+            ldid -S ../../ent.xml -K ../../certificate.p12:password PPSSPP.app/Frameworks/libMoltenVK.dylib
           fi
-          ldid -w -S"${{ github.workspace }}/ent.xml" -K"${{ github.workspace }}/certificate.p12" -U"password" PPSSPP.app
+          ldid -S ../../ent.xml -K ../../certificate.p12:password PPSSPP.app
 
       - name: Package IPA
         id: package
