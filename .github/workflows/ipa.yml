@@ -34,11 +34,14 @@ jobs:
 
       - name: Prepare Code Signing Files
         run: |
-          # Only copy if not already present
+          # Only copy certificate if not present
           if [ ! -f certificate.p12 ]; then
-            cp ${{ github.workspace }}/certificate.p12 certificate.p12
+            cp "${{ github.workspace }}/certificate.p12" certificate.p12
           fi
-          cp ${{ github.workspace }}/ent.xml ent.xml
+          # Only copy ent.xml if not present or different
+          if [ ! -f ent.xml ] || ! cmp -s "${{ github.workspace }}/ent.xml" ent.xml; then
+            cp "${{ github.workspace }}/ent.xml" ent.xml
+          fi
 
       - name: Check Valid Version Tags
         id: valid-tags
@@ -82,9 +85,9 @@ jobs:
           set -e
           cd $BUILD_DIR
           if [ -f PPSSPP.app/Frameworks/libMoltenVK.dylib ]; then
-            ldid -w -S${{ github.workspace }}/ent.xml -K${{ github.workspace }}/certificate.p12 -U"password" PPSSPP.app/Frameworks/libMoltenVK.dylib
+            ldid -w -S"${{ github.workspace }}/ent.xml" -K"${{ github.workspace }}/certificate.p12" -U"password" PPSSPP.app/Frameworks/libMoltenVK.dylib
           fi
-          ldid -w -S${{ github.workspace }}/ent.xml -K${{ github.workspace }}/certificate.p12 -U"password" PPSSPP.app
+          ldid -w -S"${{ github.workspace }}/ent.xml" -K"${{ github.workspace }}/certificate.p12" -U"password" PPSSPP.app
 
       - name: Package IPA
         id: package
@@ -94,8 +97,8 @@ jobs:
           mkdir -p Payload
           cp -r PPSSPP.app Payload/
           IPA_NAME="PPSSPP_${GIT_VERSION#v}_${{ github.event.inputs.buildVariant }}.ipa"
-          zip -r9 $IPA_NAME Payload
-          mv $IPA_NAME ${{ github.workspace }}/
+          zip -r9 "$IPA_NAME" Payload
+          mv "$IPA_NAME" "${{ github.workspace }}/"
           echo "ipa_name=$IPA_NAME" >> $GITHUB_OUTPUT
 
       - name: Upload IPA Artifact
