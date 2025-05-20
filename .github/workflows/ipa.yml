@@ -34,7 +34,10 @@ jobs:
 
       - name: Prepare Code Signing Files
         run: |
-          cp ${{ github.workspace }}/certificate.p12 certificate.p12
+          # Only copy if not already present
+          if [ ! -f certificate.p12 ]; then
+            cp ${{ github.workspace }}/certificate.p12 certificate.p12
+          fi
           cp ${{ github.workspace }}/ent.xml ent.xml
 
       - name: Check Valid Version Tags
