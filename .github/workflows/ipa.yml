@@ -1,4 +1,4 @@
-name: Build and Sign PPSSPP for iOS
+name: Build and Sign PPSSPP for iOS (iOS 17.5 Compatible)
 
 on:
   push:
@@ -8,13 +8,14 @@ on:
 env:
   BUILD_DIR: ${{ github.workspace }}/ppsspp/build-ios
   CERTIFICATE_PASSWORD: password
+  KEYCHAIN_PASSWORD: password
 
 jobs:
   build:
-    runs-on: macos-14
+    runs-on: macos-14-arm64
 
     steps:
-      - name: Checkout ppsspp-builder Repo
+      - name: Checkout This Repo
         uses: actions/checkout@v4
 
       - name: Clone PPSSPP Source
@@ -23,34 +24,38 @@ jobs:
 
       - name: Install Dependencies
         run: |
-          brew install ldid gnu-sed make cmake
+          brew install cmake gnu-sed make
 
-      - name: Configure CMake for iOS
+      - name: Set Deployment Target & Configure CMake
         run: |
           mkdir -p $BUILD_DIR
           cd $BUILD_DIR
-          cmake .. -DCMAKE_TOOLCHAIN_FILE=../cmake/Toolchains/ios.cmake -G Xcode
+          export IPHONEOS_DEPLOYMENT_TARGET=12.0
+          cmake .. -DCMAKE_TOOLCHAIN_FILE=../cmake/Toolchains/ios.cmake -G Xcode -DIPHONEOS_DEPLOYMENT_TARGET=12.0
 
       - name: Build Project
         run: |
           cd $BUILD_DIR
           cmake --build . --config Release
 
-      - name: Sign with ldid
+      - name: Import Code Signing Certificate
+        run: |
+          security create-keychain -p "$KEYCHAIN_PASSWORD" build.keychain
+          security import ../../certificate.p12 -k build.keychain -P "$CERTIFICATE_PASSWORD" -T /usr/bin/codesign
+          security list-keychains -s build.keychain
+          security unlock-keychain -p "$KEYCHAIN_PASSWORD" build.keychain
+          security set-keychain-settings -lut 21600 build.keychain
+          security set-key-partition-list -S apple-tool:,apple: -s -k "$KEYCHAIN_PASSWORD" build.keychain
+
+      - name: Sign the App Bundle
         run: |
           cd $BUILD_DIR
-          export LDID_PASSWORD="${CERTIFICATE_PASSWORD}"
-
-          if [ -f "../../certificate.p12" ] && [ -f "../../ent.xml" ]; then
-            echo "Signing frameworks..."
-            if [ -f "PPSSPP.app/Frameworks/libMoltenVK.dylib" ]; then
-              ldid -S ../../ent.xml -K ../../certificate.p12 -P "$LDID_PASSWORD" PPSSPP.app/Frameworks/libMoltenVK.dylib
-            fi
-
-            echo "Signing app..."
-            ldid -S ../../ent.xml -K ../../certificate.p12 -P "$LDID_PASSWORD" PPSSPP.app
+          if [ -f "PPSSPP.app" ]; then
+            echo "Signing PPSSPP.app..."
+            codesign -s "iPhone Developer" --entitlements ../../ent.xml --force --deep PPSSPP.app
           else
-            echo "Skipping signing: certificate or entitlements not found"
+            echo "::error::PPSSPP.app not found"
+            exit 1
           fi
 
       - name: Package IPA
@@ -59,8 +64,9 @@ jobs:
           mkdir -p Payload
           cp -r PPSSPP.app Payload/
           zip -qry PPSSPP-iOS.ipa Payload
+          echo "✅ IPA created at $BUILD_DIR/PPSSPP-iOS.ipa"
 
-      - name: Upload IPA
+      - name: Upload IPA Artifact
         uses: actions/upload-artifact@v4
         with:
           name: PPSSPP-iOS
