@@ -2,35 +2,36 @@ name: Build and Sign PPSSPP for iOS
 
 on:
   push:
-    branches:
-      - main
+    branches: [ main ]
   workflow_dispatch:
 
 env:
-  BUILD_DIR: ${{ github.workspace }}/ppsspp-builder/ppsspp/build-ios
+  BUILD_DIR: ${{ github.workspace }}/ppsspp-builder/build-ios
   CERTIFICATE_PASSWORD: password
 
 jobs:
   build-ppsspp-ios:
-    runs-on: macos-14
+    runs-on: macos-14-arm64
 
     steps:
-      - name: Checkout Repo
+      - name: Checkout Main Repo
         uses: actions/checkout@v4
-        with:
-          submodules: recursive
+
+      - name: Clone PPSSPP Submodule
+        run: |
+          git clone --recursive https://github.com/hrydgard/ppsspp.git ppsspp
 
       - name: Install Dependencies
         run: |
           brew install ldid gnu-sed make cmake
 
-      - name: Configure iOS Build
+      - name: Configure Build
         run: |
           mkdir -p $BUILD_DIR
           cd $BUILD_DIR
-          cmake .. -DCMAKE_TOOLCHAIN_FILE=../../cmake/Toolchains/ios.cmake -G Xcode
+          cmake ../ppsspp -DCMAKE_TOOLCHAIN_FILE=../ppsspp/cmake/Toolchains/ios.cmake -G Xcode
 
-      - name: Build Project
+      - name: Build PPSSPP
         run: |
           cd $BUILD_DIR
           cmake --build . --config Release
@@ -38,7 +39,7 @@ jobs:
       - name: Sign App with ldid
         run: |
           cd $BUILD_DIR
-          export LDID_PASSWORD="$CERTIFICATE_PASSWORD"
+          export LDID_PASSWORD="${CERTIFICATE_PASSWORD}"
 
           if [ -f "../../certificate.p12" ] && [ -f "../../ent.xml" ]; then
             echo "Signing MoltenVK if it exists..."
@@ -49,7 +50,7 @@ jobs:
             echo "Signing PPSSPP.app..."
             ldid -S ../../ent.xml -K ../../certificate.p12 -P "$LDID_PASSWORD" PPSSPP.app
           else
-            echo "⚠️ certificate.p12 or ent.xml not found. Skipping code signing."
+            echo "⚠️ certificate.p12 or ent.xml not found. Skipping signing."
           fi
 
       - name: Package IPA
