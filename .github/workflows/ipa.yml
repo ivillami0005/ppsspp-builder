@@ -6,18 +6,18 @@ on:
   workflow_dispatch:
 
 env:
-  BUILD_DIR: ${{ github.workspace }}/ppsspp-builder/build-ios
+  BUILD_DIR: ${{ github.workspace }}/ppsspp/build-ios
   CERTIFICATE_PASSWORD: password
 
 jobs:
-  build-ppsspp-ios:
-    runs-on: macos-14
+  build:
+    runs-on: macos-14-arm64
 
     steps:
-      - name: Checkout Main Repo
+      - name: Checkout ppsspp-builder Repo
         uses: actions/checkout@v4
 
-      - name: Clone PPSSPP Submodule
+      - name: Clone PPSSPP Source
         run: |
           git clone --recursive https://github.com/hrydgard/ppsspp.git ppsspp
 
@@ -25,32 +25,32 @@ jobs:
         run: |
           brew install ldid gnu-sed make cmake
 
-      - name: Configure Build
+      - name: Configure CMake for iOS
         run: |
           mkdir -p $BUILD_DIR
           cd $BUILD_DIR
-          cmake ../ppsspp -DCMAKE_TOOLCHAIN_FILE=../ppsspp/cmake/Toolchains/ios.cmake -G Xcode
+          cmake .. -DCMAKE_TOOLCHAIN_FILE=../cmake/Toolchains/ios.cmake -G Xcode
 
-      - name: Build PPSSPP
+      - name: Build Project
         run: |
           cd $BUILD_DIR
           cmake --build . --config Release
 
-      - name: Sign App with ldid
+      - name: Sign with ldid
         run: |
           cd $BUILD_DIR
           export LDID_PASSWORD="${CERTIFICATE_PASSWORD}"
 
           if [ -f "../../certificate.p12" ] && [ -f "../../ent.xml" ]; then
-            echo "Signing MoltenVK if it exists..."
+            echo "Signing frameworks..."
             if [ -f "PPSSPP.app/Frameworks/libMoltenVK.dylib" ]; then
               ldid -S ../../ent.xml -K ../../certificate.p12 -P "$LDID_PASSWORD" PPSSPP.app/Frameworks/libMoltenVK.dylib
             fi
 
-            echo "Signing PPSSPP.app..."
+            echo "Signing app..."
             ldid -S ../../ent.xml -K ../../certificate.p12 -P "$LDID_PASSWORD" PPSSPP.app
           else
-            echo "⚠️ certificate.p12 or ent.xml not found. Skipping signing."
+            echo "Skipping signing: certificate or entitlements not found"
           fi
 
       - name: Package IPA
@@ -59,7 +59,6 @@ jobs:
           mkdir -p Payload
           cp -r PPSSPP.app Payload/
           zip -qry PPSSPP-iOS.ipa Payload
-          echo "✅ IPA created at $BUILD_DIR/PPSSPP-iOS.ipa"
 
       - name: Upload IPA
         uses: actions/upload-artifact@v4
