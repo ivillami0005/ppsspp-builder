@@ -1,80 +1,79 @@
-name: Build and Sign PPSSPP for iOS (iOS 17.5 Compatible)
+name: Build iOS PPSSPP IPA
 
 on:
-  push:
-    branches: [ main ]
   workflow_dispatch:
-
-env:
-  BUILD_DIR: ${{ github.workspace }}/ppsspp/build-ios
-  CERTIFICATE_PASSWORD: password
-  KEYCHAIN_PASSWORD: password
-  IPHONEOS_DEPLOYMENT_TARGET: "12.0"
 
 jobs:
   build:
-    runs-on: macos-14
+    runs-on: macos-latest
+    env:
+      BUILD_DIR: ppsspp/build-ios
+      IPHONEOS_DEPLOYMENT_TARGET: "12.0"
 
     steps:
-      - name: Checkout This Repo
+      - name: Checkout source
         uses: actions/checkout@v4
+        with:
+          submodules: recursive
 
-      - name: Clone PPSSPP Source
+      - name: Install dependencies
         run: |
-          git clone --recursive https://github.com/hrydgard/ppsspp.git ppsspp
+          brew install cmake ninja
 
-      - name: Install Dependencies
+      - name: Clone MoltenVK
         run: |
-          brew install cmake gnu-sed make
+          git clone https://github.com/KhronosGroup/MoltenVK.git deps/MoltenVK
+          cd deps/MoltenVK && ./fetchDependencies --ios && cd ../..
 
-      - name: Configure CMake
+      - name: Copy MoltenVK frameworks
+        run: |
+          mkdir -p ppsspp/ios/MoltenVK
+          cp -R deps/MoltenVK/Package/Latest/MoltenVK/iOS/MoltenVK.framework ppsspp/ios/MoltenVK/
+          cp deps/MoltenVK/Package/Latest/MoltenVK/iOS/libMoltenVK.dylib ppsspp/ios/MoltenVK/
+
+      - name: Configure via CMake
         run: |
           mkdir -p $BUILD_DIR
           cd $BUILD_DIR
-          cmake .. \
-          -DCMAKE_TOOLCHAIN_FILE=../cmake/Toolchains/ios.cmake \
-          -DIPHONEOS_DEPLOYMENT_TARGET=${IPHONEOS_DEPLOYMENT_TARGET} \
-          -DCMAKE_XCODE_ATTRIBUTE_IPHONEOS_DEPLOYMENT_TARGET=${IPHONEOS_DEPLOYMENT_TARGET} \
-          -DCMAKE_XCODE_ATTRIBUTE_CODE_SIGN_STYLE=Manual \
-          -DCMAKE_XCODE_ATTRIBUTE_CODE_SIGN_IDENTITY="iPhone Developer" \
-          -DCMAKE_XCODE_ATTRIBUTE_PROVISIONING_PROFILE_SPECIFIER="YourProfileName" \
-          -G Xcode
-          
-      - name: Build Project
-        run: |
-          cd $BUILD_DIR
-          cmake --build . --config Release
+          cmake ../.. \
+            -DCMAKE_TOOLCHAIN_FILE=../cmake/Toolchains/ios.cmake \
+            -DIOS_PLATFORM=OS \
+            -G Xcode \
+            -DCMAKE_XCODE_ATTRIBUTE_IPHONEOS_DEPLOYMENT_TARGET=$IPHONEOS_DEPLOYMENT_TARGET
 
-      - name: Import Code Signing Certificate
+      - name: Set up signing (.p12 & provisioning)
         run: |
-          security create-keychain -p "$KEYCHAIN_PASSWORD" build.keychain
-          security import ../../certificate.p12 -k build.keychain -P "$CERTIFICATE_PASSWORD" -T /usr/bin/codesign
-          security list-keychains -s build.keychain
-          security unlock-keychain -p "$KEYCHAIN_PASSWORD" build.keychain
+          CERT_P12="certs/signing.p12"
+          PROV_PROFILE="certs/ppsspp.mobileprovision"
+          KEYCHAIN_PW="password"
+          security create-keychain -p "$KEYCHAIN_PW" build.keychain
+          security import "$CERT_P12" -k build.keychain -P "password" -T /usr/bin/codesign
           security set-keychain-settings -lut 21600 build.keychain
-          security set-key-partition-list -S apple-tool:,apple: -s -k "$KEYCHAIN_PASSWORD" build.keychain
+          mkdir -p ~/Library/MobileDevice/Provisioning\ Profiles
+          cp "$PROV_PROFILE" ~/Library/MobileDevice/Provisioning\ Profiles/
 
-      - name: Sign the App Bundle
+      - name: Build & sign PPSSPP
         run: |
           cd $BUILD_DIR
-          if [ -f "PPSSPP.app" ]; then
-            echo "Signing PPSSPP.app..."
-            codesign -s "iPhone Developer" --entitlements ../../ent.xml --force --deep PPSSPP.app
-          else
-            echo "::error::PPSSPP.app not found"
-            exit 1
-          fi
+          xcodebuild \
+            -scheme PPSSPP \
+            -configuration Release \
+            -destination generic/platform=iOS \
+            CODE_SIGN_STYLE=Manual \
+            CODE_SIGN_IDENTITY="iPhone Developer" \
+            PROVISIONING_PROFILE_SPECIFIER="PPSSPP Profile" \
+            IPHONEOS_DEPLOYMENT_TARGET=$IPHONEOS_DEPLOYMENT_TARGET \
+            clean build
 
       - name: Package IPA
         run: |
           cd $BUILD_DIR
           mkdir -p Payload
-          cp -r PPSSPP.app Payload/
-          zip -qry PPSSPP-iOS.ipa Payload
-          echo "✅ IPA created at $BUILD_DIR/PPSSPP-iOS.ipa"
+          cp -R Release-iphoneos/PPSSPP.app Payload/
+          zip -qry PPSSPP-iOS.ipa Payload/
 
-      - name: Upload IPA Artifact
+      - name: Upload IPA
         uses: actions/upload-artifact@v4
         with:
           name: PPSSPP-iOS
-          path: ${{ env.BUILD_DIR }}/PPSSPP-iOS.ipa
+          path: $BUILD_DIR/PPSSPP-iOS.ipa
