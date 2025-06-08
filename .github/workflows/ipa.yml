@@ -13,15 +13,15 @@ on:
           - debug
 
 jobs:
-  ipa:
-    name: Generate ${{ github.event.inputs.buildVariant }} IPA
-    runs-on: macos-latest
+  build-ipa:
+    name: Build ${{ github.event.inputs.buildVariant }} IPA
+    runs-on: macos-14  # Use the latest macOS runner
 
     env:
       BUILD_DIR: ${{ github.workspace }}/ppsspp/build-ios
 
     steps:
-      - name: Checkout code
+      - name: Checkout repository and submodules
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
@@ -29,32 +29,30 @@ jobs:
 
       - name: Install dependencies
         run: |
-          brew install ldid gnu-sed
+          brew install ldid gnu-sed make cmake || true
           echo "/usr/local/opt/gnu-sed/libexec/gnubin" >> $GITHUB_PATH
+          echo "/usr/local/opt/make/libexec/gnubin" >> $GITHUB_PATH
 
-      - name: Prepare Code Signing Files
+      - name: Prepare code signing files
         run: |
-          if [ ! -f certificate.p12 ]; then
-            cp "${{ github.workspace }}/certificate.p12" certificate.p12
-          fi
-          if [ ! -f ent.xml ] || ! cmp -s "${{ github.workspace }}/ent.xml" ent.xml; then
-            cp "${{ github.workspace }}/ent.xml" ent.xml
-          fi
+          cp "${{ github.workspace }}/certificate.p12" certificate.p12
+          cp "${{ github.workspace }}/ent.xml" ent.xml
 
-      - name: Check Valid Version Tags
+      - name: Ensure valid version tags
         id: valid-tags
         run: |
-          echo "count=$(git tag -l 'v[0-9]*' | wc -l | tr -d ' ')" >> $GITHUB_OUTPUT
+          TAG_COUNT=$(git tag -l 'v[0-9]*' | wc -l | tr -d ' ')
+          echo "count=$TAG_COUNT" >> $GITHUB_OUTPUT
 
-      - name: Fetch Upstream Tags If Needed
+      - name: Fetch upstream tags if needed
         if: steps.valid-tags.outputs.count == '0'
         run: |
           git remote add upstream https://github.com/hrydgard/ppsspp.git
-          git fetch --deepen=15000 --no-recurse-submodules --tags upstream || exit 0
+          git fetch --tags upstream
 
-      - name: Set GIT_VERSION Variable
+      - name: Set GIT_VERSION variable
         run: |
-          echo "GIT_VERSION=$(git describe --always)" >> $GITHUB_ENV
+          echo "GIT_VERSION=$(git describe --tags --always)" >> $GITHUB_ENV
 
       - name: Setup ccache
         uses: hendrikmuhs/ccache-action@main
@@ -62,7 +60,7 @@ jobs:
           key: ios
           create-symlink: true
 
-      - name: Configure and Build (CMake + Make)
+      - name: Configure and build (CMake + Make)
         env:
           CC: clang
           CXX: clang++
@@ -78,19 +76,17 @@ jobs:
           make -j$(sysctl -n hw.ncpu)
           echo "${GIT_VERSION#v}" > PPSSPP.app/Version.txt
 
-      - name: Code Sign Framework and App
+      - name: Code sign framework and app
         run: |
-          set -e
           cd $BUILD_DIR
           if [ -f PPSSPP.app/Frameworks/libMoltenVK.dylib ]; then
-            ldid -S ../../ent.xml -K ../../certificate.p12:kravasign PPSSPP.app/Frameworks/libMoltenVK.dylib
+            ldid -S ../../ent.xml -K ../../certificate.p12 PPSSPP.app/Frameworks/libMoltenVK.dylib
           fi
-          ldid -S ../../ent.xml -K ../../certificate.p12:kravasign PPSSPP.app
+          ldid -S ../../ent.xml -K ../../certificate.p12 PPSSPP.app
 
       - name: Package IPA
         id: package
         run: |
-          set -e
           cd $BUILD_DIR
           mkdir -p Payload
           cp -r PPSSPP.app Payload/
@@ -99,7 +95,7 @@ jobs:
           mv "$IPA_NAME" "${{ github.workspace }}/"
           echo "ipa_name=$IPA_NAME" >> $GITHUB_OUTPUT
 
-      - name: Upload IPA Artifact
+      - name: Upload IPA artifact
         uses: actions/upload-artifact@v4
         with:
           name: ${{ steps.package.outputs.ipa_name }}
