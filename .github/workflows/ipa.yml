@@ -15,7 +15,7 @@ on:
 jobs:
   build-ipa:
     name: Build ${{ github.event.inputs.buildVariant }} IPA
-    runs-on: macos-14  # Use the latest macOS runner
+    runs-on: macos-14
 
     env:
       BUILD_DIR: ${{ github.workspace }}/ppsspp/build-ios
