@@ -35,8 +35,12 @@ jobs:
 
       - name: Prepare code signing files
         run: |
-          cp "${{ github.workspace }}/certificate.p12" certificate.p12
-          cp "${{ github.workspace }}/ent.xml" ent.xml
+          if [ ! -f certificate.p12 ] || ! cmp -s "${{ github.workspace }}/certificate.p12" certificate.p12; then
+            cp "${{ github.workspace }}/certificate.p12" certificate.p12
+          fi
+          if [ ! -f ent.xml ] || ! cmp -s "${{ github.workspace }}/ent.xml" ent.xml; then
+            cp "${{ github.workspace }}/ent.xml" ent.xml
+          fi
 
       - name: Ensure valid version tags
         id: valid-tags
