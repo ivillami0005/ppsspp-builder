@@ -1,106 +1,67 @@
-name: Generate iOS IPA
+name: Build and Sign PPSSPP for iOS
 
 on:
+  push:
+    branches:
+      - main
   workflow_dispatch:
-    inputs:
-      buildVariant:
-        type: choice
-        description: 'Build Variant'
-        required: true
-        default: 'release'
-        options:
-          - release
-          - debug
+
+env:
+  BUILD_DIR: ${{ github.workspace }}/ppsspp-builder/ppsspp/build-ios
+  CERTIFICATE_PASSWORD: password
 
 jobs:
-  build-ipa:
-    name: Build ${{ github.event.inputs.buildVariant }} IPA
-    runs-on: macos-14
-
-    env:
-      BUILD_DIR: ${{ github.workspace }}/ppsspp/build-ios
+  build-ppsspp-ios:
+    runs-on: macos-14-arm64
 
     steps:
-      - name: Checkout repository and submodules
+      - name: Checkout Repo
         uses: actions/checkout@v4
         with:
-          fetch-depth: 0
           submodules: recursive
 
-      - name: Install dependencies
+      - name: Install Dependencies
         run: |
-          brew install ldid gnu-sed make cmake || true
-          echo "/usr/local/opt/gnu-sed/libexec/gnubin" >> $GITHUB_PATH
-          echo "/usr/local/opt/make/libexec/gnubin" >> $GITHUB_PATH
+          brew install ldid gnu-sed make cmake
 
-      - name: Prepare code signing files
+      - name: Configure iOS Build
         run: |
-          if [ ! -f certificate.p12 ] || ! cmp -s "${{ github.workspace }}/certificate.p12" certificate.p12; then
-            cp "${{ github.workspace }}/certificate.p12" certificate.p12
-          fi
-          if [ ! -f ent.xml ] || ! cmp -s "${{ github.workspace }}/ent.xml" ent.xml; then
-            cp "${{ github.workspace }}/ent.xml" ent.xml
-          fi
+          mkdir -p $BUILD_DIR
+          cd $BUILD_DIR
+          cmake .. -DCMAKE_TOOLCHAIN_FILE=../../cmake/Toolchains/ios.cmake -G Xcode
 
-      - name: Ensure valid version tags
-        id: valid-tags
-        run: |
-          TAG_COUNT=$(git tag -l 'v[0-9]*' | wc -l | tr -d ' ')
-          echo "count=$TAG_COUNT" >> $GITHUB_OUTPUT
-
-      - name: Fetch upstream tags if needed
-        if: steps.valid-tags.outputs.count == '0'
-        run: |
-          git remote add upstream https://github.com/hrydgard/ppsspp.git
-          git fetch --tags upstream
-
-      - name: Set GIT_VERSION variable
-        run: |
-          echo "GIT_VERSION=$(git describe --tags --always)" >> $GITHUB_ENV
-
-      - name: Setup ccache
-        uses: hendrikmuhs/ccache-action@main
-        with:
-          key: ios
-          create-symlink: true
-
-      - name: Configure and build (CMake + Make)
-        env:
-          CC: clang
-          CXX: clang++
-          USE_CCACHE: 1
-        run: |
-          set -e
-          cd ppsspp
-          mkdir -p build-ios
-          echo "const char *PPSSPP_GIT_VERSION = \"${GIT_VERSION}\";" > git-version.cpp
-          echo "#define PPSSPP_GIT_VERSION_NO_UPDATE 1" >> git-version.cpp
-          cd build-ios
-          cmake -DCMAKE_TOOLCHAIN_FILE=../cmake/Toolchains/ios.cmake -DCMAKE_BUILD_TYPE=${{ github.event.inputs.buildVariant }} ..
-          make -j$(sysctl -n hw.ncpu)
-          echo "${GIT_VERSION#v}" > PPSSPP.app/Version.txt
-
-      - name: Code sign framework and app
+      - name: Build Project
         run: |
           cd $BUILD_DIR
-          if [ -f PPSSPP.app/Frameworks/libMoltenVK.dylib ]; then
-            ldid -S ../../ent.xml -K ../../certificate.p12 PPSSPP.app/Frameworks/libMoltenVK.dylib
+          cmake --build . --config Release
+
+      - name: Sign App with ldid
+        run: |
+          cd $BUILD_DIR
+          export LDID_PASSWORD="$CERTIFICATE_PASSWORD"
+
+          if [ -f "../../certificate.p12" ] && [ -f "../../ent.xml" ]; then
+            echo "Signing MoltenVK if it exists..."
+            if [ -f "PPSSPP.app/Frameworks/libMoltenVK.dylib" ]; then
+              ldid -S ../../ent.xml -K ../../certificate.p12 -P "$LDID_PASSWORD" PPSSPP.app/Frameworks/libMoltenVK.dylib
+            fi
+
+            echo "Signing PPSSPP.app..."
+            ldid -S ../../ent.xml -K ../../certificate.p12 -P "$LDID_PASSWORD" PPSSPP.app
+          else
+            echo "⚠️ certificate.p12 or ent.xml not found. Skipping code signing."
           fi
-          ldid -S ../../ent.xml -K ../../certificate.p12 PPSSPP.app
 
       - name: Package IPA
-        id: package
         run: |
           cd $BUILD_DIR
           mkdir -p Payload
           cp -r PPSSPP.app Payload/
-          IPA_NAME="PPSSPP_${GIT_VERSION#v}_${{ github.event.inputs.buildVariant }}.ipa"
-          zip -r9 "$IPA_NAME" Payload
-          mv "$IPA_NAME" "${{ github.workspace }}/"
-          echo "ipa_name=$IPA_NAME" >> $GITHUB_OUTPUT
+          zip -qry PPSSPP-iOS.ipa Payload
+          echo "✅ IPA created at $BUILD_DIR/PPSSPP-iOS.ipa"
 
-      - name: Upload IPA artifact
+      - name: Upload IPA
         uses: actions/upload-artifact@v4
         with:
-          name: ${{ steps.package.outputs.ipa_name }}
-          path: ${{ github.workspace }}/${{ steps.package.outputs.ipa_name }}
+          name: PPSSPP-iOS
+          path: ${{ env.BUILD_DIR }}/PPSSPP-iOS.ipa
