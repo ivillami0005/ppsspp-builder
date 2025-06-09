@@ -64,23 +64,21 @@ jobs:
       - name: Setup signing
         run: |
           security create-keychain -p "$P12_PASSWORD" build.keychain
-          security import certs/signing.p12 \
+          security import certificate.p12 \
             -k build.keychain -P "$P12_PASSWORD" -T /usr/bin/codesign
           security list-keychains -s build.keychain
           security unlock-keychain -p "$P12_PASSWORD" build.keychain
           security set-keychain-settings -lut 21600 build.keychain
-          mkdir -p ~/Library/MobileDevice/Provisioning\ Profiles
-          cp certs/ppsspp.mobileprovision ~/Library/MobileDevice/Provisioning\ Profiles/
 
       - name: Sign MoltenVK dylib
         run: |
           cd $BUILD_DIR/PPSSPP.app/Frameworks
-          ldid -S../../../../ent.xml -K../../certificate.p12 -U$password libMoltenVK.dylib
+          ldid -S"$GITHUB_WORKSPACE/ent.xml" -K"$GITHUB_WORKSPACE/certificate.p12" -U"$P12_PASSWORD" libMoltenVK.dylib
 
       - name: Sign PPSSPP.app
         run: |
           cd $BUILD_DIR
-          ldid -Sent.xml -K../../certificate.p12 -Upassword PPSSPP.app
+          ldid -S"$GITHUB_WORKSPACE/ent.xml" -K"$GITHUB_WORKSPACE/certificate.p12" -U"$P12_PASSWORD" PPSSPP.app
 
       - name: Package IPA
         run: |
@@ -113,4 +111,3 @@ jobs:
           path: |
             PPSSPP_0v*.ipa
             org.ppsspp.ppsspp-dev-latest_0v*.deb
-
