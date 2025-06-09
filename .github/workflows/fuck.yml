@@ -1,113 +1,103 @@
-name: Build iOS PPSSPP
+name: PPSSPP iOS Builder
 
 on:
+  workflow_dispatch:
   push:
     branches: [master]
-    tags: ["v*.*"]
-    paths-ignore:
-      - '*.{txt,md}'
-      - 'Tools/**'
-      - '.{editorconfig,gitattributes,gitignore}'
-      - 'appveyor.yml'
-  pull_request:
-    branches: [master]
-    paths-ignore:
-      - '*.{txt,md}'
-      - 'Tools/**'
-      - '.{editorconfig,gitattributes,gitignore}'
-      - 'appveyor.yml'
-  workflow_dispatch:
-
-env:
-  BUILD_DIR: ppsspp/build-ios
-  IPHONEOS_DEPLOYMENT_TARGET: "12.0"
-  P12_PASSWORD: "password"
 
 jobs:
-  build-ios:
+  build:
     runs-on: macos-latest
 
     steps:
-      - name: Checkout repo
+      - name: Checkout repository
         uses: actions/checkout@v4
         with:
           submodules: recursive
 
       - name: Install dependencies
         run: |
-          brew install cmake ninja make gnu-sed ldid
+          brew install cmake ninja gnu-sed make ldid
 
-      - name: Build MoltenVK
+      - name: Clone and build MoltenVK
         run: |
-          cd ext/vulkan/MoltenVK
+          git clone https://github.com/KhronosGroup/MoltenVK.git deps/MoltenVK
+          cd deps/MoltenVK
           ./fetchDependencies --ios
-          cd ../../..
-          mkdir -p ppsspp/ios/MoltenVK
-          cp -R ext/vulkan/MoltenVK/Package/Release/MoltenVK/MoltenVK.xcframework \
-            ppsspp/ios/MoltenVK/
-          cp ext/vulkan/MoltenVK/Package/Release/MoltenVK/iOS/libMoltenVK.dylib \
-            ppsspp/ios/MoltenVK/
+          if [ ! -d "Package/Release/MoltenVK/MoltenVK.xcframework" ]; then
+            echo "MoltenVK.xcframework not found. Build failed."
+            exit 1
+          fi
+          cd ../..
 
-      - name: Configure & build PPSSPP
+      - name: Setup fake signing keychain
         run: |
-          mkdir -p $BUILD_DIR
-          cd $BUILD_DIR
-          echo "const char *PPSSPP_GIT_VERSION = \"$(git describe --always)\";" > git-version.cpp
-          echo "#define PPSSPP_GIT_VERSION_NO_UPDATE 1" >> git-version.cpp
-          cmake ../.. \
-            -DCMAKE_TOOLCHAIN_FILE=../cmake/Toolchains/ios.cmake \
-            -DIOS_PLATFORM=OS \
-            -GXcode \
-            -DCMAKE_XCODE_ATTRIBUTE_IPHONEOS_DEPLOYMENT_TARGET=$IPHONEOS_DEPLOYMENT_TARGET
-          make -j$(sysctl -n hw.ncpu)
-
-      - name: Setup signing
-        run: |
-          security create-keychain -p "$P12_PASSWORD" build.keychain
-          security import certificate.p12 \
-            -k build.keychain -P "$P12_PASSWORD" -T /usr/bin/codesign
+          security create-keychain -p "password" build.keychain
+          security import certificate.p12 -k build.keychain -P "password" -T /usr/bin/codesign
           security list-keychains -s build.keychain
-          security unlock-keychain -p "$P12_PASSWORD" build.keychain
+          security unlock-keychain -p "password" build.keychain
           security set-keychain-settings -lut 21600 build.keychain
 
-      - name: Sign MoltenVK dylib
+      - name: Build and sign PPSSPP
         run: |
-          cd $BUILD_DIR/PPSSPP.app/Frameworks
-          ldid -S"$GITHUB_WORKSPACE/ent.xml" -K"$GITHUB_WORKSPACE/certificate.p12" -U"$P12_PASSWORD" libMoltenVK.dylib
+          export MAKE=/usr/local/opt/make/libexec/gnubin/make
+          export SED=/usr/local/opt/gnu-sed/libexec/gnubin/sed
+          export LDID=/usr/local/bin/ldid
 
-      - name: Sign PPSSPP.app
-        run: |
-          cd $BUILD_DIR
-          ldid -S"$GITHUB_WORKSPACE/ent.xml" -K"$GITHUB_WORKSPACE/certificate.p12" -U"$P12_PASSWORD" PPSSPP.app
+          if [[ ! -d ppsspp ]]; then
+            echo "Missing ppsspp/ directory!"
+            exit 1
+          fi
+
+          cd ppsspp
+          echo "const char *PPSSPP_GIT_VERSION = \"$(git describe --always)\";" > git-version.cpp
+          echo "#define PPSSPP_GIT_VERSION_NO_UPDATE 1" >> git-version.cpp
+          mkdir build-ios
+          cd build-ios
+
+          cmake -DCMAKE_TOOLCHAIN_FILE=../cmake/Toolchains/ios.cmake ..
+          $MAKE -j$(sysctl -n hw.ncpu)
+
+          ln -s ./ PPSSPP.app/Payload
+          version=$(git describe --tags --match="v*" | $SED -e 's@-\([^-]*\)-\([^-]*\)$$@-\1-\2@;s@^v@@;s@%@~@g')
+          echo "$version" > PPSSPP.app/Version.txt
+
+          $LDID -w -S -IlibMoltenVK -K$GITHUB_WORKSPACE/certificate.p12 -Upassword PPSSPP.app/Frameworks/libMoltenVK.dylib
+          $LDID -w -S$GITHUB_WORKSPACE/ent.xml -K$GITHUB_WORKSPACE/certificate.p12 -Upassword PPSSPP.app
+
+          cd ../..
 
       - name: Package IPA
         run: |
-          cd $BUILD_DIR
-          mkdir -p Payload
-          ln -s ./PPSSPP.app Payload/
-          version=$(git describe --tags --match="v*.*" | sed -E 's@^v@@;s@-([0-9]+)-.*$@-\1@')
-          echo $version > Payload/PPSSPP.app/Version.txt
-          zip -qry ../../PPSSPP_0v${version}.ipa Payload/
+          cd ppsspp/build-ios
+          version=$(git describe --tags --match="v*" | /usr/local/opt/gnu-sed/libexec/gnubin/sed -e 's@-\([^-]*\)-\([^-]*\)$$@-\1-\2@;s@^v@@;s@%@~@g')
+          zip -r9 ../../PPSSPP_0v${version}.ipa Payload/PPSSPP.app
 
       - name: Package DEB
         run: |
-          cd $BUILD_DIR
-          version=$(git describe --tags --match="v*.*" | sed -E 's@^v@@;s@-([0-9]+)-.*$@-\1@')
-          pkg=org.ppsspp.ppsspp-dev-latest_0v${version}_iphoneos-arm
+          cd ppsspp/build-ios
+          version=$(git describe --tags --match="v*" | /usr/local/opt/gnu-sed/libexec/gnubin/sed -e 's@-\([^-]*\)-\([^-]*\)$$@-\1-\2@;s@^v@@;s@%@~@g')
+          pkg="org.ppsspp.ppsspp-dev-latest_0v${version}_iphoneos-arm"
+
           mkdir -p $pkg/DEBIAN
           cp ../../control $pkg/DEBIAN/control
-          echo $version >> $pkg/DEBIAN/control
+          echo "$version" >> $pkg/DEBIAN/control
           chmod 0755 $pkg/DEBIAN/control
-          mkdir -p $pkg/Library/PPSSPPRepoIcons $pkg/Library/PreferenceLoader/Preferences $pkg/Applications
-          cp ../../org.ppsspp.ppsspp.png $pkg/Library/PPSSPPRepoIcons/
+
+          mkdir -p $pkg/Library/PPSSPPRepoIcons
+          mkdir -p $pkg/Library/PreferenceLoader/Preferences
+          mkdir -p $pkg/Applications
+
+          cp ../../org.ppsspp.ppsspp.png $pkg/Library/PPSSPPRepoIcons/org.ppsspp.ppsspp-dev-latest.png
           cp -a ../../Preferences/PPSSPP $pkg/Library/PreferenceLoader/Preferences/
           cp -a PPSSPP.app $pkg/Applications/
+
           dpkg -b $pkg ../../$pkg.deb
 
       - name: Upload artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: build-artifacts
+          name: ppsspp-build-artifacts
           path: |
             PPSSPP_0v*.ipa
             org.ppsspp.ppsspp-dev-latest_0v*.deb
