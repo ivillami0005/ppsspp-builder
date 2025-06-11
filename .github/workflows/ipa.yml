@@ -5,11 +5,12 @@ on:
     branches: [ main ]
   pull_request:
     branches: [ main ]
+  workflow_dispatch:  # Add manual trigger
 
 jobs:
   build:
-    runs-on: macos-11  # macOS 11 (Big Sur) supports Xcode 9.4.1
-    timeout-minutes: 120  # Build may take longer with older tools
+    runs-on: macos-11
+    timeout-minutes: 120
 
     steps:
     - name: Checkout repository
@@ -40,16 +41,14 @@ jobs:
         git clone https://github.com/hrydgard/ppsspp.git
         cd ppsspp
         git submodule update --init --recursive
-        git checkout tags/v1.17.1  # Use a compatible version
+        git checkout tags/v1.19.1
 
     - name: Build application and packages
       run: |
-        # Set environment variables for iOS 11 SDK
         export SDKROOT=/Applications/Xcode_9.4.1.app/Contents/Developer/Platforms/iPhoneOS.platform/Developer/SDKs/iPhoneOS11.4.sdk
         export IPHONEOS_DEPLOYMENT_TARGET=11.4
         export DEVELOPER_DIR=/Applications/Xcode_9.4.1.app/Contents/Developer
         
-        # Build with older tools
         make all LDID="ldid" MAKE="make" SED="gsed"
 
     - name: Upload artifacts
@@ -59,4 +58,3 @@ jobs:
         path: |
           PPSSPP_*.ipa
           org.ppsspp.ppsspp-dev-latest_*.deb
-
