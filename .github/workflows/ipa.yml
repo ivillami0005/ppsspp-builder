@@ -1,11 +1,11 @@
-name: Build PPSSPP for iOS (Better Compatibility)
+name: Build PPSSPP for iOS (Compatibility)
 
 on:
   push:
     branches: [ main ]
   pull_request:
     branches: [ main ]
-  workflow_dispatch:  # Add manual trigger
+  workflow_dispatch:
 
 jobs:
   build:
@@ -18,16 +18,11 @@ jobs:
 
     - name: Install Xcode 9.4.1
       run: |
-        # Download and install Xcode 9.4.1
         curl -o xcode.xip https://download.developer.apple.com/Developer_Tools/Xcode_9.4.1/Xcode_9.4.1.xip
         xip -x xcode.xip
         sudo mv Xcode.app /Applications/Xcode_9.4.1.app
-        
-        # Accept license and set as default
         sudo xcode-select -s /Applications/Xcode_9.4.1.app/Contents/Developer
         sudo xcodebuild -license accept
-        
-        # Install required SDKs
         /Applications/Xcode_9.4.1.app/Contents/Developer/usr/bin/xcodebuild -downloadPlatform iOS
 
     - name: Install dependencies
@@ -41,20 +36,66 @@ jobs:
         git clone https://github.com/hrydgard/ppsspp.git
         cd ppsspp
         git submodule update --init --recursive
-        git checkout tags/v1.19.1
+        git checkout tags/v1.17.1
 
-    - name: Build application and packages
+    - name: Get MoltenVK.xcframework
+      run: |
+        git clone --depth 1 --filter=blob:none --sparse https://github.com/ivillami0005/ppsspp
+        cd ppsspp
+        git sparse-checkout set ios
+        cd ..
+        mkdir -p ppsspp/MoltenVK
+        cp -R ppsspp/ios/MoltenVK.xcframework ppsspp/MoltenVK/
+
+    - name: Build application
       run: |
         export SDKROOT=/Applications/Xcode_9.4.1.app/Contents/Developer/Platforms/iPhoneOS.platform/Developer/SDKs/iPhoneOS11.4.sdk
         export IPHONEOS_DEPLOYMENT_TARGET=11.4
         export DEVELOPER_DIR=/Applications/Xcode_9.4.1.app/Contents/Developer
         
-        make all LDID="ldid" MAKE="make" SED="gsed"
+        cd ppsspp
+        echo "const char *PPSSPP_GIT_VERSION = \"$(git describe --always)\";" > git-version.cpp
+        echo "#define PPSSPP_GIT_VERSION_NO_UPDATE 1" >> git-version.cpp
+        mkdir build-ios
+        cd build-ios
+        cmake -DCMAKE_TOOLCHAIN_FILE=../cmake/Toolchains/ios.cmake -DMOLTENVK_PATH=../MoltenVK ..
+        make -j$(sysctl -n hw.ncpu)
+        ln -s ./ Payload
+        version_number=$(git describe --tags --match="v*" | gsed -e 's@-\([^-]*\)-\([^-]*\)$@-\1-\2@;s@^v@@;s@%@~@g')
+        echo $version_number > PPSSPP.app/Version.txt
+        ldid -w -S -IlibMoltenVK -K../../certificate.p12 -Upassword PPSSPP.app/Frameworks/libMoltenVK.dylib
+
+    - name: Build packages
+      run: |
+        export DEVELOPER_DIR=/Applications/Xcode_9.4.1.app/Contents/Developer
+        
+        cd ppsspp/build-ios
+        version_number=$(git describe --tags --match="v*" | gsed -e 's@-\([^-]*\)-\([^-]*\)$@-\1-\2@;s@^v@@;s@%@~@g')
+        
+        # Build IPA
+        zip -r9 ../../PPSSPP_0v${version_number}.ipa Payload/PPSSPP.app
+        
+        # Build DEB
+        package_name="org.ppsspp.ppsspp-dev-latest_0v${version_number}_iphoneos-arm"
+        mkdir $package_name
+        mkdir $package_name/DEBIAN
+        cp ../../control $package_name/DEBIAN
+        echo $version_number >> $package_name/DEBIAN/control
+        chmod 0755 $package_name/DEBIAN/control
+        mkdir $package_name/Library
+        mkdir $package_name/Library/PPSSPPRepoIcons
+        cp ../../org.ppsspp.ppsspp.png $package_name/Library/PPSSPPRepoIcons/org.ppsspp.ppsspp-dev-latest.png
+        mkdir $package_name/Library/PreferenceLoader
+        mkdir $package_name/Library/PreferenceLoader/Preferences
+        cp -a ../../Preferences/PPSSPP $package_name/Library/PreferenceLoader/Preferences/
+        mkdir $package_name/Applications
+        cp -a PPSSPP.app $package_name/Applications/
+        dpkg -b $package_name ../../${package_name}.deb
 
     - name: Upload artifacts
       uses: actions/upload-artifact@v3
       with:
-        name: PPSSPP-Build
+        name: PPSSPP-Compatibility-Build
         path: |
           PPSSPP_*.ipa
           org.ppsspp.ppsspp-dev-latest_*.deb
