@@ -59,3 +59,4 @@ jobs:
         path: |
           PPSSPP_*.ipa
           org.ppsspp.ppsspp-dev-latest_*.deb
+
