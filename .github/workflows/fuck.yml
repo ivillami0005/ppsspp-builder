@@ -1,45 +1,39 @@
-name: Build PPSSPP iOS (Fixed Paths)
+name: Build PPSSPP for iOS
 
 on:
-  workflow_dispatch:
   push:
-    branches: [master]
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
 
 jobs:
   build:
     runs-on: macos-latest
 
     steps:
-      - name: Checkout repo
-        uses: actions/checkout@v4
-        with:
-          submodules: recursive
+    - name: Checkout repository
+      uses: actions/checkout@v4
 
-      - name: Temporary tag for git describe
-        run: git tag v0.0.0
+    - name: Install dependencies
+      run: |
+        brew update
+        brew install ldid cmake make gnu-sed
 
-      - name: Install required tools
-        run: |
-          brew install cmake ninja make gnu-sed ldid
-          which make
-          which gsed
-          which ldid
+    - name: Clone PPSSPP source
+      run: |
+        git clone https://github.com/hrydgard/ppsspp.git
+        cd ppsspp
+        git submodule update --init --recursive
 
-      - name: Setup fake signing keychain
-        run: |
-          security create-keychain -p "password" build.keychain
-          security import certificate.p12 -k build.keychain -P "password" -T /usr/bin/codesign
-          security list-keychains -s build.keychain
-          security unlock-keychain -p "password" build.keychain
-          security set-keychain-settings -lut 21600 build.keychain
+    - name: Build application and packages
+      run: |
+        make -C ppsspp git-version.cpp
+        make all
 
-      - name: Build (Makefile)
-        run: make all
-
-      - name: Upload IPA and DEB
-        uses: actions/upload-artifact@v4
-        with:
-          name: ppsspp-ios-build
-          path: |
-            *.ipa
-            *.deb
+    - name: Upload artifacts
+      uses: actions/upload-artifact@v3
+      with:
+        name: PPSSPP-Build
+        path: |
+          PPSSPP_*.ipa
+          org.ppsspp.ppsspp-dev-latest_*.deb
