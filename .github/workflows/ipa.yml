@@ -1,100 +1,110 @@
-name: Build PPSSPP for iOS (Compatibility)
+name: Build & Package iOS (PPSSPP)
 
 on:
   push:
-    branches: [ main ]
   pull_request:
-    branches: [ main ]
   workflow_dispatch:
 
 jobs:
-  build:
-    runs-on: macos-11
+  build-ios:
+    runs-on: macos-14
 
     steps:
-    - name: Checkout repository
+    # 1) Checkout your main repo
+    - name: Checkout PPSSPP repo
       uses: actions/checkout@v4
 
-    - name: Install Xcode 9.4.1
+    # 2) Clone the MoltenVK framework at the exact commit
+    - name: Fetch MoltenVK.xcframework
       run: |
-        curl -o xcode.xip https://download.developer.apple.com/Developer_Tools/Xcode_9.4.1/Xcode_9.4.1.xip
-        xip -x xcode.xip
-        sudo mv Xcode.app /Applications/Xcode_9.4.1.app
-        sudo xcode-select -s /Applications/Xcode_9.4.1.app/Contents/Developer
-        sudo xcodebuild -license accept
-        /Applications/Xcode_9.4.1.app/Contents/Developer/usr/bin/xcodebuild -downloadPlatform iOS
-
-    - name: Install dependencies
-      run: |
-        brew update
-        brew install ldid cmake make gnu-sed
-        brew install libpng
-
-    - name: Clone PPSSPP source
-      run: |
-        git clone https://github.com/hrydgard/ppsspp.git
-        cd ppsspp
-        git submodule update --init --recursive
-        git checkout tags/v1.17.1
-
-    - name: Get MoltenVK.xcframework
-      run: |
-        git clone --depth 1 --filter=blob:none --sparse https://github.com/ivillami0005/ppsspp
-        cd ppsspp
-        git sparse-checkout set ios
+        git clone https://github.com/hrydgard/ppsspp-moltenvk.git --depth 1
+        cd ppsspp-moltenvk
+        git checkout 0bf904d2d1d159eb95bdefcd8432eee79ee1da14
         cd ..
-        mkdir -p ppsspp/MoltenVK
-        cp -R ppsspp/ios/MoltenVK.xcframework ppsspp/MoltenVK/
 
-    - name: Build application
+    # 3) Install iOS-specific tools
+    - name: Install iOS dependencies
       run: |
-        export SDKROOT=/Applications/Xcode_9.4.1.app/Contents/Developer/Platforms/iPhoneOS.platform/Developer/SDKs/iPhoneOS11.4.sdk
-        export IPHONEOS_DEPLOYMENT_TARGET=11.4
-        export DEVELOPER_DIR=/Applications/Xcode_9.4.1.app/Contents/Developer
-        
-        cd ppsspp
-        echo "const char *PPSSPP_GIT_VERSION = \"$(git describe --always)\";" > git-version.cpp
-        echo "#define PPSSPP_GIT_VERSION_NO_UPDATE 1" >> git-version.cpp
-        mkdir build-ios
-        cd build-ios
-        cmake -DCMAKE_TOOLCHAIN_FILE=../cmake/Toolchains/ios.cmake -DMOLTENVK_PATH=../MoltenVK ..
-        make -j$(sysctl -n hw.ncpu)
-        ln -s ./ Payload
-        version_number=$(git describe --tags --match="v*" | gsed -e 's@-\([^-]*\)-\([^-]*\)$@-\1-\2@;s@^v@@;s@%@~@g')
-        echo $version_number > PPSSPP.app/Version.txt
-        ldid -w -S -IlibMoltenVK -K../../certificate.p12 -Upassword PPSSPP.app/Frameworks/libMoltenVK.dylib
+        brew install ldid imagemagick
 
-    - name: Build packages
+    # 4) Copy PPSSPP app icons (1×, 2×, 3×)
+    - name: Generate iOS icons from PPSSPP assets
       run: |
-        export DEVELOPER_DIR=/Applications/Xcode_9.4.1.app/Contents/Developer
-        
-        cd ppsspp/build-ios
-        version_number=$(git describe --tags --match="v*" | gsed -e 's@-\([^-]*\)-\([^-]*\)$@-\1-\2@;s@^v@@;s@%@~@g')
-        
-        # Build IPA
-        zip -r9 ../../PPSSPP_0v${version_number}.ipa Payload/PPSSPP.app
-        
-        # Build DEB
-        package_name="org.ppsspp.ppsspp-dev-latest_0v${version_number}_iphoneos-arm"
-        mkdir $package_name
-        mkdir $package_name/DEBIAN
-        cp ../../control $package_name/DEBIAN
-        echo $version_number >> $package_name/DEBIAN/control
-        chmod 0755 $package_name/DEBIAN/control
-        mkdir $package_name/Library
-        mkdir $package_name/Library/PPSSPPRepoIcons
-        cp ../../org.ppsspp.ppsspp.png $package_name/Library/PPSSPPRepoIcons/org.ppsspp.ppsspp-dev-latest.png
-        mkdir $package_name/Library/PreferenceLoader
-        mkdir $package_name/Library/PreferenceLoader/Preferences
-        cp -a ../../Preferences/PPSSPP $package_name/Library/PreferenceLoader/Preferences/
-        mkdir $package_name/Applications
-        cp -a PPSSPP.app $package_name/Applications/
-        dpkg -b $package_name ../../${package_name}.deb
+        mkdir -p build-ios/PPSSPP.app
+        cp Preferences/PPSSPP/org.ppsspp.ppsspp.png   build-ios/PPSSPP.app/Icon-60.png
+        cp Preferences/PPSSPP/org.ppsspp.ppsspp@2x.png build-ios/PPSSPP.app/Icon-120.png
+        cp Preferences/PPSSPP/org.ppsspp.ppsspp@3x.png build-ios/PPSSPP.app/Icon-180.png
+        cp Preferences/PPSSPP/org.ppsspp.ppsspp.png   build-ios/PPSSPP.app/AppIcon.png
 
-    - name: Upload artifacts
-      uses: actions/upload-artifact@v3
+    # 5) Write out your full entitlement set
+    - name: Create full entitlements (ent.xml)
+      run: |
+        cat > ent.xml <<EOF
+        <?xml version="1.0" encoding="UTF-8"?>
+        <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+        <plist version="1.0">
+        <dict>
+          <key>platform-application</key><true/>
+          <key>com.apple.developer.kernel.extended-virtual-addressing</key><true/>
+          <key>com.apple.developer.kernel.increased-memory-limit</key><true/>
+          <key>com.apple.developer.networking.multicast</key><true/>
+          <key>com.apple.private.security.container-manager</key><true/>
+          <key>com.apple.private.security.no-sandbox</key><true/>
+          <key>com.apple.private.security.storage.AppDataContainers</key><true/>
+          <key>com.apple.security.iokit-user-client-class</key>
+          <array>
+            <string>AGXDeviceUserClient</string>
+            <string>IOMobileFramebufferUserClient</string>
+            <string>IOSurfaceRootUserClient</string>
+          </array>
+          <key>get-task-allow</key><true/>
+        </dict>
+        </plist>
+        EOF
+
+    # 6) Build & sign the PPSSPP app, bundling MoltenVK.a
+    - name: Build & sign PPSSPP
+      env:
+        CC: clang
+        CXX: clang++
+      run: |
+        # Build PPSSPP for iOS
+        ./b.sh --ios
+
+        # Prepare app bundle
+        mkdir -p build-ios/PPSSPP.app/Frameworks
+
+        # Copy the static MoltenVK library
+        cp ppsspp-moltenvk/MoltenVK.xcframework/ios-arm64/libMoltenVK.a \
+           build-ios/PPSSPP.app/Frameworks/
+
+        # Ad-hoc sign both the main binary and MoltenVK
+        ldid -Sent.xml build-ios/PPSSPP.app/PPSSPP
+        ldid -Sent.xml build-ios/PPSSPP.app/Frameworks/libMoltenVK.a
+
+        # Embed version metadata
+        GIT_VERSION=$(git describe --tags --always)
+        echo "${GIT_VERSION#v}" > build-ios/PPSSPP.app/Version.txt
+
+        # Update Info.plist with icon entries
+        plutil -insert CFBundleIconFiles \
+          -json '["Icon-60.png","Icon-120.png","Icon-180.png"]' \
+          build-ios/PPSSPP.app/Info.plist
+        plutil -insert CFBundleIcons \
+          -json '{ "CFBundlePrimaryIcon": {"CFBundleIconFiles":["AppIcon.png"]} }' \
+          build-ios/PPSSPP.app/Info.plist
+
+    # 7) Package into an IPA
+    - name: Package PPSSPP.ipa
+      run: |
+        mkdir -p ppsspp/Payload
+        cp -a build-ios/PPSSPP.app ppsspp/Payload/
+        (cd ppsspp && zip -qry PPSSPP.ipa Payload)
+        rm -rf ppsspp/Payload
+
+    # 8) Upload IPA for download
+    - name: Upload IPA artifact
+      uses: actions/upload-artifact@v4
       with:
-        name: PPSSPP-Compatibility-Build
-        path: |
-          PPSSPP_*.ipa
-          org.ppsspp.ppsspp-dev-latest_*.deb
+        name: PPSSPP-iOS-Adhoc
+        path: ppsspp/PPSSPP.ipa
