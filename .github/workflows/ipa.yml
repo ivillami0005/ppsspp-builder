@@ -10,25 +10,28 @@ jobs:
     runs-on: macos-14
 
     steps:
-    # 1) Checkout your main repo
+    # 1) Checkout your repo + submodules
     - name: Checkout PPSSPP repo
       uses: actions/checkout@v4
+      with:
+        submodules: 'true'               # init & update submodules  [oai_citation_attribution:7‡reddit.com](https://www.reddit.com/r/iosgaming/comments/e7i1wm/guide_how_to_install_ppsspp_on_ios/?utm_source=chatgpt.com)
 
-    # 2) Clone the MoltenVK framework at the exact commit
-    - name: Fetch MoltenVK.xcframework
+    # 2) Fetch MoltenVK at specific commit
+    - name: Clone MoltenVK.xcframework
       run: |
         git clone https://github.com/hrydgard/ppsspp-moltenvk.git --depth 1
         cd ppsspp-moltenvk
         git checkout 0bf904d2d1d159eb95bdefcd8432eee79ee1da14
         cd ..
 
-    # 3) Install iOS-specific tools
+    # 3) Install signing & imaging tools
     - name: Install iOS dependencies
       run: |
-        brew install ldid imagemagick
+        brew install ldid           # ad-hoc signing tool  [oai_citation_attribution:8‡github.com](https://github.com/hrydgard/ppsspp/wiki/build-instructions?utm_source=chatgpt.com)
+        brew install imagemagick    # optional: extra icon gen  [oai_citation_attribution:9‡andrewhoog.com](https://www.andrewhoog.com/post/how-to-build-an-ios-app-with-github-actions-2023/?utm_source=chatgpt.com)
 
-    # 4) Copy PPSSPP app icons (1×, 2×, 3×)
-    - name: Generate iOS icons from PPSSPP assets
+    # 4) Copy PPSSPP icons (1×/2×/3×)
+    - name: Prepare iOS icons
       run: |
         mkdir -p build-ios/PPSSPP.app
         cp Preferences/PPSSPP/org.ppsspp.ppsspp.png   build-ios/PPSSPP.app/Icon-60.png
@@ -36,14 +39,23 @@ jobs:
         cp Preferences/PPSSPP/org.ppsspp.ppsspp@3x.png build-ios/PPSSPP.app/Icon-180.png
         cp Preferences/PPSSPP/org.ppsspp.ppsspp.png   build-ios/PPSSPP.app/AppIcon.png
 
-    # 5) Write out your full entitlement set
+    # 5) Generate Xcode project via CMake
+    - name: Generate Xcode project
+      run: |
+        mkdir -p build-ios
+        cmake \
+          -DCMAKE_TOOLCHAIN_FILE=./cmake/Toolchains/ios.cmake \
+          -DIOS_PLATFORM=OS \
+          -H. -Bbuild-ios \
+          -GXcode               # CMake → Xcodeproj  [oai_citation_attribution:10‡github.com](https://github.com/hrydgard/ppsspp/wiki/build-instructions?utm_source=chatgpt.com)
+
+    # 6) Create full entitlements file
     - name: Create full entitlements (ent.xml)
       run: |
         cat > ent.xml <<EOF
         <?xml version="1.0" encoding="UTF-8"?>
         <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
-        <plist version="1.0">
-        <dict>
+        <plist version="1.0"><dict>
           <key>platform-application</key><true/>
           <key>com.apple.developer.kernel.extended-virtual-addressing</key><true/>
           <key>com.apple.developer.kernel.increased-memory-limit</key><true/>
@@ -51,34 +63,46 @@ jobs:
           <key>com.apple.private.security.container-manager</key><true/>
           <key>com.apple.private.security.no-sandbox</key><true/>
           <key>com.apple.private.security.storage.AppDataContainers</key><true/>
-          <key>com.apple.security.iokit-user-client-class</key>
-          <array>
+          <key>com.apple.security.iokit-user-client-class</key><array>
             <string>AGXDeviceUserClient</string>
             <string>IOMobileFramebufferUserClient</string>
             <string>IOSurfaceRootUserClient</string>
           </array>
           <key>get-task-allow</key><true/>
-        </dict>
-        </plist>
-        EOF
+        </dict></plist>
+        EOF                      # your private entitlements  [oai_citation_attribution:11‡github.com](https://github.com/hrydgard/ppsspp/issues/14240?utm_source=chatgpt.com)
 
-    # 6) Build & sign the PPSSPP app, bundling MoltenVK.a
-    - name: Build & sign PPSSPP
+    # 7) Build & archive with Xcode
+    - name: Archive PPSSPP.xcarchive
+      run: |
+        xcodebuild \
+          -project build-ios/PPSSPP.xcodeproj \
+          -scheme PPSSPP \
+          -configuration Release \
+          -archivePath build-ios/PPSSPP.xcarchive \
+          archive
+
+    # 8) Export IPA via your Export.plist
+    - name: Export .ipa
+      run: |
+        xcodebuild \
+          -exportArchive \
+          -archivePath build-ios/PPSSPP.xcarchive \
+          -exportPath build-ios \
+          -exportOptionsPlist ios/Export.plist
+
+    # 9) Sign with ldid & embed MoltenVK.a
+    - name: Sign binaries & bundle MoltenVK
       env:
         CC: clang
         CXX: clang++
       run: |
-        # Build PPSSPP for iOS
-        ./b.sh --ios
-
-        # Prepare app bundle
+        # Copy static MoltenVK
         mkdir -p build-ios/PPSSPP.app/Frameworks
-
-        # Copy the static MoltenVK library
         cp ppsspp-moltenvk/MoltenVK.xcframework/ios-arm64/libMoltenVK.a \
            build-ios/PPSSPP.app/Frameworks/
 
-        # Ad-hoc sign both the main binary and MoltenVK
+        # Ad-hoc sign
         ldid -Sent.xml build-ios/PPSSPP.app/PPSSPP
         ldid -Sent.xml build-ios/PPSSPP.app/Frameworks/libMoltenVK.a
 
@@ -86,25 +110,17 @@ jobs:
         GIT_VERSION=$(git describe --tags --always)
         echo "${GIT_VERSION#v}" > build-ios/PPSSPP.app/Version.txt
 
-        # Update Info.plist with icon entries
+        # Update plist icons
         plutil -insert CFBundleIconFiles \
           -json '["Icon-60.png","Icon-120.png","Icon-180.png"]' \
           build-ios/PPSSPP.app/Info.plist
         plutil -insert CFBundleIcons \
-          -json '{ "CFBundlePrimaryIcon": {"CFBundleIconFiles":["AppIcon.png"]} }' \
+          -json '{ "CFBundlePrimaryIcon":{"CFBundleIconFiles":["AppIcon.png"]} }' \
           build-ios/PPSSPP.app/Info.plist
 
-    # 7) Package into an IPA
-    - name: Package PPSSPP.ipa
-      run: |
-        mkdir -p ppsspp/Payload
-        cp -a build-ios/PPSSPP.app ppsspp/Payload/
-        (cd ppsspp && zip -qry PPSSPP.ipa Payload)
-        rm -rf ppsspp/Payload
-
-    # 8) Upload IPA for download
-    - name: Upload IPA artifact
+    # 10) Upload IPA artifact
+    - name: Upload IPA
       uses: actions/upload-artifact@v4
       with:
         name: PPSSPP-iOS-Adhoc
-        path: ppsspp/PPSSPP.ipa
+        path: build-ios/PPSSPP.ipa
